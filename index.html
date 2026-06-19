@@ -481,6 +481,7 @@ function loadPoints() {
 }
 
 function savePoints() {
+  points = dedupePoints(points);
   localStorage.setItem(SK_DATA, JSON.stringify(points));
   scheduleSheetsSync();
 }
@@ -539,9 +540,11 @@ async function pollSheets() {
   if (!getSheetsUrl() || !document.getElementById('app')) return;
   const remote = await fetchFromSheets();
   if (remote) {
-    // Simple merge: if remote has more points or newer total, update
-    if (remote.length !== points.length) {
-      points = remote;
+    const cleaned = dedupePoints(remote);
+    // Only re-render if something actually changed (avoid flicker/extra work)
+    const changed = JSON.stringify(cleaned) !== JSON.stringify(points);
+    if (changed) {
+      points = cleaned;
       localStorage.setItem(SK_DATA, JSON.stringify(points));
       filterPoints();
       setSyncStatus('ok', 'تم التحديث من Sheets');
@@ -571,7 +574,7 @@ function enterReadOnly() {
   showApp();
 }
 
-function showApp() {
+async function showApp() {
   document.getElementById('pwGate').classList.add('hidden');
   document.getElementById('pwGate').style.display = 'none';
   document.getElementById('app').style.display = '';
@@ -585,15 +588,36 @@ function showApp() {
     document.getElementById('adminBtn').style.display   = 'none';
   }
 
+  // Load local copy first so something shows immediately
   points = loadPoints();
   filterPoints();
 
-  // Init sheets
+  // If Sheets is connected, it is the single source of truth —
+  // always pull the freshest copy on open instead of trusting local cache.
   const url = getSheetsUrl();
   if (url) {
-    setSyncStatus('ok', 'متصل بـ Sheets');
+    setSyncStatus('busy', 'جاري التحميل من Sheets...');
+    const remote = await fetchFromSheets();
+    if (remote) {
+      points = dedupePoints(remote);
+      localStorage.setItem(SK_DATA, JSON.stringify(points));
+      filterPoints();
+      setSyncStatus('ok', 'متصل بـ Sheets');
+    } else {
+      setSyncStatus('err', 'فشل التحميل من Sheets — بيانات محلية');
+    }
     pollSheets();
   }
+}
+
+// Remove duplicate point numbers, keeping the last occurrence (most recent write)
+function dedupePoints(arr) {
+  const map = new Map();
+  arr.forEach(p => {
+    const num = parseInt(p.num);
+    map.set(num, { num, E: parseFloat(p.E), N: parseFloat(p.N), desc: String(p.desc) });
+  });
+  return Array.from(map.values()).sort((a,b) => a.num - b.num);
 }
 
 // ════════════════════════════════════════════════════════════════
